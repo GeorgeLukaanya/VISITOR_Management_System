@@ -1,0 +1,82 @@
+# Visitor Management — Phase 1 ("Replace the Book") local/dev stack.
+#
+# Brings up: app (php-fpm), nginx, postgres, redis, a queue worker, and reverb.
+# All config is environment-driven so the same images redeploy onto Uganda-localised
+# infra unchanged (see CLAUDE.md "Privacy & data protection").
+#
+# The Laravel app lives in ./src and is bind-mounted into every PHP container.
+
+x-app-base: &app-base
+  build:
+    context: ./docker/php
+    args:
+      UID: ${UID:-1000}
+      GID: ${GID:-1000}
+  volumes:
+    - ./src:/var/www/html
+  # NOTE: connection config (DB/Redis/Reverb hosts) is intentionally NOT set here.
+  # It lives in src/.env, which already targets the compose service names
+  # (postgres/redis/reverb). Injecting these as real container env vars would
+  # override PHPUnit's test settings and cause the suite to run against — and
+  # RefreshDatabase to WIPE — the live Postgres. Keep them out of the process env.
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_started
+
+services:
+  app:
+    <<: *app-base
+    container_name: vms_app
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: vms_nginx
+    ports:
+      - "${APP_PORT:-8080}:80"
+    volumes:
+      - ./src:/var/www/html
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: vms_postgres
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-visitor_management}
+      POSTGRES_USER: ${DB_USERNAME:-vms}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+    ports:
+      - "${DB_FORWARD_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-vms} -d ${DB_DATABASE:-visitor_management}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: vms_redis
+    ports:
+      - "${REDIS_FORWARD_PORT:-6379}:6379"
+
+  queue:
+    <<: *app-base
+    container_name: vms_queue
+    # Off-session notification jobs run here (see CLAUDE.md "Off-session notification job").
+    command: php artisan queue:work --tries=3 --backoff=5
+
+  reverb:
+    <<: *app-base
+    container_name: vms_reverb
+    # Real-time guard-tablet websocket server.
+    command: php artisan reverb:start --host=0.0.0.0 --port=8080
+    ports:
+      - "${REVERB_FORWARD_PORT:-8081}:8080"
+
+volumes:
+  pgdata:

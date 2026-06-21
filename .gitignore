@@ -1,0 +1,12 @@
+# Environment / secrets (never commit real credentials)
+.env
+.env.*
+!.env.example
+
+# Local Claude Code settings
+.claude/settings.local.json
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
