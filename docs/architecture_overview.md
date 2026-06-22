@@ -149,7 +149,7 @@ standalone goal — see ADR-003 / Quality Requirements for why. but the response
 
 High-level context diagram (systems and actors):
 
-![Context diagram](diagrams/context.svg)
+![Context diagram](diagrams/Context.svg)
 
 
 ### 3.2 Technical context
@@ -252,7 +252,7 @@ happens on redial — fresh session, or resume? Not yet decided; tracked as open
 
 ## 7. Deployment View
 
-![Deployment diagram](diagrams/deployment.svg)
+![Deployment diagram](diagrams/Deployment.svg)
 
 **Note** for separate containers: the queue worker is in a separate container from the web app refer to [ADR-005: Queue worker runs as a separate container](adr/005-queue-worker-separate-container.md) for rationale and details. This is a deliberate architectural decision to protect the visitor's session from slow notification dispatch.
 
