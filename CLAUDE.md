@@ -72,6 +72,8 @@ Simpler to operate for the MVP.
   `checked_in_at`, `checked_out_at`, `ussd_session_id`.
 - `users` — building managers and tenant admins, with roles.
 
+ERD: see `docs/diagrams/erd.svg` for the visual data model.
+
 Routing code uniqueness: decide whether codes are globally unique or unique
 **per building**. Per-building is more scalable (short codes, reused across
 buildings) but requires the visitor to first identify the building. Because
