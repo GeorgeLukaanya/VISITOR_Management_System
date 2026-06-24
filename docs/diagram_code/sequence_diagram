@@ -1,0 +1,30 @@
+/**
+https://sequencediagram.org/  
+'
+version 1 
+
+DATE 24/06/2024 
+**/
+
+title USSD Check-in — One Screen Flow
+
+Visitor->Aggregator:Dials shortcode
+Aggregator->System:Session start (MSISDN included)
+System-->Aggregator:Screen 1 — "Enter tenant code:"
+Aggregator-->Visitor:Display screen 1
+Visitor->Aggregator:Types code e.g. 111
+Aggregator->System:Screen 1 response
+
+System->DB:Lookup tenant by code (routing_codes WHERE status=active)
+
+alt code not found
+  DB-->System:No match
+  System-->Aggregator:End session — "Code not recognised, please try again"
+  Aggregator-->Visitor:Error message
+else code found
+  DB-->System:Tenant found
+  System->DB:Write visit (MSISDN, tenant_id, routing_code_id, timestamp)
+  DB-->System:Ack
+  System-->Aggregator:End session — "Checked in at [Tenant Name]. Show this to the guard."
+  Aggregator-->Visitor:Confirmation screen
+end

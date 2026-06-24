@@ -1,349 +1,206 @@
-# Architecture Overview  Visitor Management SaaS PHASE 1: "Replace the Book"
+# Architecture Overview — Visitor Management SaaS (Phase 1: "Replace the Book")
 
-Status: Living document. 
-Last updated: 21/06/2026.
-Related: see `/adr` for decision log, 
-             `risk-register.md` for current risks,
-             `/diagrams` for C4 views.
-
-## Table of Contents
-
-- [1. Introduction & Goals](#1-introduction--goals)
-  - [1.1 What we're building](#11-what-were-building)
-  - [1.2 Who it's for](#12-who-its-for)
-  - [1.3 Phase boundary](#13-phase-boundary)
-  - [1.4 Quality goals, ranked](#14-quality-goals-ranked)
-- [2. Constraints](#2-constraints)
-  - [2.1 Organizational](#21-organizational)
-  - [2.2 Technical](#22-technical)
-  - [2.3 Commercial / contractual](#23-commercial--contractual)
-  - [2.4 Regulatory](#24-regulatory)
-  - [2.5 Environmental](#25-environmental)
-- [3. Context & Scope](#3-context--scope)
-  - [3.1 Business context](#31-business-context)
-  - [3.2 Technical context](#32-technical-context)
-- [4. Solution Strategy](#4-solution-strategy)
-- [5. Building Block View](#5-building-block-view)
-- [6. Runtime View](#6-runtime-view)
-  - [6.1 USSD check-in (the critical path)](#61-ussd-check-in-the-critical-path)
-  - [6.2 Session-drop recovery (open question)](#62-session-drop-recovery-open-question)
-- [7. Deployment View](#7-deployment-view)
-- [8. Crosscutting Concepts](#8-crosscutting-concepts)
-  - [8.1 Multi-tenant security & isolation](#81-multi-tenant-security--isolation)
-  - [8.2 Data protection](#82-data-protection)
-  - [8.3 Session-timeout-driven performance budget](#83-session-timeout-driven-performance-budget)
-  - [8.4 Graceful degradation](#84-graceful-degradation)
-  - [8.5 Observability](#85-observability)
-- [9. Architecture Decisions](#9-architecture-decisions)
-- [10. Quality Requirements](#10-quality-requirements)
-- [11. Risks & Technical Debt](#11-risks--technical-debt)
-- [12. Glossary](#12-glossary)
+Status: Living document · Last updated: 24/06/2026
+Related: [`adrs/`](adrs/) decision log · [`risk_register.md`](risk_register.md) · [`diagrams/`](diagrams/) C4 views · [`claude_docs.md`](claude_docs.md) one-page summary
 
 ---
 
-## 1. Introduction & Goals
+## 1. What & Why
 
-### 1.1 What we're building
-A USSD-based visitor management system that digitally replaces the paper sign-in book at
-reception. A visitor dials a tenant-specific code, confirms identity/purpose in a two-screen
-flow and the relevant tenant and/or security guard is notified in real time. Tenants can
-view and export their own visitor logs; building managers get a building-wide view.
+**What:** A USSD-based visitor management system that digitally replaces the paper sign-in
+book at reception. A visitor dials a tenant-specific code, confirms purpose in a two-screen
+flow and the relevant person is notified in real time. Tenants view
+and export their own logs; building managers get a building-wide view.
 
-This is deliberately **not** the full product vision. Phase 1 scope is narrow on purpose —
-ship the smallest thing that replaces the book, learn from it, then expand.
+This is deliberately **not** the full product vision  ship the smallest thing that replaces
+the book, learn then expand.**(mvp)**
 
-### 1.2 Who it's for
-- **Visitors** — interact only via USSD, on any phone (including basic feature phones).
-- **Building Tenants** — businesses inside a building, want to see via dashboard  and export who's coming to see them.
-- **Security guards** — need real-time arrival notifications.
-- **Building managers** — want a building-wide,  dashboard and exportable log.
+**Who it's for:**
+- **Visitors** — USSD only, any phone including basic feature phones.
+- **Tenants** — businesses in a building; view/export who's visiting them.
+- **Security guards** — need real-time arrival notifications.(Some to consider for future phases)
+- **Building managers** — building-wide dashboard and exportable log.
+- **Administrators** — manage tenants, buildings, and the system itself.
 
-### 1.3 Phase boundary
-Phase 1 only builds the "core flow" USSD check-in, manager dashboard
-notifications, tenant-scoped logs and exports.
- **Phase 2** adds the other
-side: richer dashboards and additional consumers of the same data. This boundary is a
-deliberate architectural decision (see ADR-002) because it shapes how tightly we couple
-Phase 1 code to the database.
+**Phase boundary:** Phase 1 builds the core flow only — USSD check-in, manager dashboard,
+notifications, tenant-scoped logs/exports. **Phase 2** adds richer dashboards and more
+consumers of the same data. This boundary is an architectural decision (ADR-002): it dictates
+how tightly Phase 1 couples to the database.
 
-### 1.4 Quality goals, ranked
-Given our constraints (small team, limited resources, narrow MVP), in priority order:
+**Quality goals, ranked.** Given a small team and a narrow MVP, priorities are:
 
-1. **Availability** — the system replaces something that, by definition, was always available
-   (a physical book on a desk). Going down is a regression, not just downtime.
-2. **Security** — we handle personal data (visitor names, phone numbers, host/tenant mapping).
-3. **Usability/Accessibility** — visitors are on feature phones, often low-literacy, often on
-   2G. A confusing flow fails the same way an outage does , from the visitor's perspective,
-   "didn't work" looks the same either way.
-   -The view should be accesible on simple smartphones
-4. **Modifiability** — Phase 2 will consume the same database; today's shortcuts are
-   tomorrow's rewrite if we're not careful.
-5. **Scalability** — real, but not urgent at current scale. Don't over-build for this yet.
-6. **Performance** is treated as a *constraint feeding into availability* (see §10), not a
-standalone goal — see ADR-003 / Quality Requirements for why. but the responses should be quick to work well with the sessions.
+1. **Availability** — replaces something that was always available (a book on a desk). Down is a regression, not just downtime.
+2. **Security** — we hold personal data (phone numbers, host/tenant mapping).
+3. **Usability** — visitors are on feature phones, 2G, often low-literacy. A confusing flow fails the same way an outage does.
+4. **Modifiability** — Phase 2 consumes this same DB; today's shortcuts are tomorrow's rewrite.
+5. **Scalability** — real but not urgent. Don't over-build yet.
+6. **Observability** — if a session drops, we must know whether it was our fault or the aggregator's.
+7. **Reliability** — a dropped session must never produce a duplicate or corrupted log entry.
+8. **Performance** — the aggregator's per-screen timeout is a hard budget; a slow response fails the check-in outright.
+
+Performance is **not** a standalone goal — it's a latency *budget* feeding availability (§5).
 
 ---
 
-## 2. Constraints
+## 2. Constraints & Context
 
-### 2.1 Organizational
-- Team of **3 developers**, no dedicated security or ops specialist.
-- Phase 1 timeline target: **~1 month** to working MVP.
+**Constraints:**
 
-### 2.2 Technical
-- Stack is locked: **Laravel + PostgreSQL + Docker** (ADR-001) .
-- USSD interactions are constrained by the aggregator's session model: short-lived sessions
-  (typically 10–180s total, depending on provider), each screen response generally needs to
-  return in a few seconds or the session times out and the visitor has to redial.
-- Multi-tenant data model is required from day one (ADR-002) ,there is no single-tenant
-  version of this product.
+| Type | Constraint |
+|---|---|
+| Organizational | 3 developers, no dedicated security/ops. Target ~1 month to MVP. |
+| Technical | Stack locked: Laravel + PostgreSQL + Docker (ADR-001). Multi-tenant from day one (ADR-002). |
+| USSD | Aggregator sessions are short-lived (~10–180s); each screen must respond in a few seconds or the session times out and the visitor redials. |
+| Commercial | Per-session USSD billing (negotiating toward flat pricing). Fewer screens = cheaper, which pressures against extra validation steps. |
+| Regulatory | Visitor data is personal data; carry in-country data-residency requirements. |
+| Environmental | Visitors connect over variable public networks — drops can originate on the visitor's side. Must degrade gracefully (no dupes, no lost check-ins). |
 
-### 2.3 Commercial / contractual
-- Per-session USSD costs are billed by the aggregator , currently being negotiated toward
-  flat per-session pricing. This is a real architectural pressure: fewer screens/round-trips
-  is cheaper, which can conflict with adding more validation or steps.
-
-
-### 2.4 Regulatory
-- Visitor data (name, phone number, purpose, host) is personal data under applicable data
-  protection law. Depending on jurisdiction, this may carry data residency requirements
-  (data must be stored in-country).
-
-### 2.5 Environmental
-- Visitors connect over public telecom networks of varying quality session drops can
-  originate from the visitor's network, not just our infrastructure. The system must degrade gracefully (no duplicate notifications, no lost check-ins) rather than assume reliable end-to-end delivery.
-
----
-
-## 3. Context & Scope
-
-### 3.1 Business context
+**Business context:**
 
 ```
-                    ┌─────────────┐
-   dials code       │             │   confirms purpose
-   ───────────────► │   Visitor   │
-   (feature phone)   │             │
-                    └──────┬──────┘
+   dials code        ┌─────────────┐   confirms purpose
+   ───────────────►  │   Visitor   │
+   (feature phone)   └──────┬──────┘
                            │ USSD session
                            ▼
                 ┌─────────────────────┐
-                │   USSD Aggregator    │  (Africa's Talking)
-                │   — outside our      │
-                │     control          │
+                │   USSD Aggregator    │  (Africa's Talking — outside our control)
                 └──────────┬───────────┘
                            │ HTTP callback
                            ▼
                 ┌─────────────────────┐
-                │  Visitor Mgmt System  │◄────── Tenant (views/exports logs)
-                │  (Laravel + Postgres) │
+                │  Visitor Mgmt System │◄────── Tenant (views/exports own logs)
+                │  (Laravel + Postgres)│
                 └──────────┬───────────┘
                            │ real-time notification
                            ▼
-              Security Guard / Tenant contact
+                for phase 1 it will be push/in-app to manage(not yet concrete or fully decided on)
 
-                Building Manager ◄── exportable building-wide log and dashboard
+                Building Manager ◄── exportable building-wide log + dashboard
 ```
+![Context diagram](diagrams/Context.svg)
 
-### Context Diagram
-
-High-level context diagram (systems and actors):
-
-![Context diagram](diagrams/context.svg)
-
-
-### 3.2 Technical context
-- **Inbound**: HTTP callbacks from the USSD aggregator per session screen.
-- **Outbound**: notification dispatch (channel TBD — SMS/push/in-app) to tenant/guard;
-  exports (CSV/PDF) to tenant and building manager.
-- **Phase 2 boundary**: other intergrations like cctv.
+**Technical context:**
+- **Inbound:** HTTP callbacks from the aggregator, one per session screen.
+- **Outbound:** notification dispatch (SMS/push/in-app — TBD) to tenant/guard; CSV/PDF exports to tenant and manager.
+- **Phase 2 boundary:** other integrations, e.g. CCTV.
 
 ---
 
-## 4. Solution Strategy
+## 3. Solution Strategy
 
-- **Stack**: Laravel + PostgreSQL + Docker, chosen for team familiarity and fast MVP delivery
-  within a 1-month window with a 3-person team (ADR-001).
-- **Multi-tenancy**: single database, `tenant_id`-scoped rows rather than schema-per-tenant since its
-  simpler to operate with no dedicated DBA, acceptable at current scale (ADR-002).
-- **Architecture style**: modular monolith, not microservices. A small team with limited
-  resources cannot afford microservices' operational overhead; modularity is enforced through
-  code organization (clear module boundaries) rather than network boundaries, keeping the
-  door open to splitting out services later if Phase 2 demands it.
-- **USSD flow**: two-screen check-in flow, intentionally minimal, both to respect session
-  cost pressure (§2.3) and session timeout risk (§2.2).
-- **Notification delivery**: dispatched off-session (i.e., not blocking the visitor's USSD
-  session) so a slow notification channel can never cause a session timeout.
+- **Stack:** Laravel + PostgreSQL + Docker  team familiarity, fast MVP in a 1-month window (ADR-001).
+- **Multi-tenancy:** single database, `tenant_id`-scoped rows (not schema-per-tenant) ,simpler to operate with no DBA, fine at current scale (ADR-002).
+- **Architecture style:** modular monolith, not microservices. A small team can't afford microservice ops overhead; module boundaries are enforced in code, leaving the door open to split out services if Phase 2 demands.
+- **USSD flow:** one-screen check-in, intentionally minimal — respects both session cost  and timeout risk.
+- **Notifications off-session:** dispatched *after* the USSD session ends, so a slow channel can never time out the visitor's session. **This single decision is the spine of the design** it's why the queue worker is its own container (ADR-005) and why §4's runtime path ends the session before notifying. (to be decided on  whether to have them )
 
 ---
 
-## 5. Building Block View
+## 4. How It's Built
 
-See `/diagrams/container.svg` (C4 Container diagram) for the current view. Summary:
-
+### Building blocks (C4 Container)
 ![Container diagram](diagrams/Containers.svg)
 
-- **USSD Gateway Handler** — receives aggregator callbacks, drives the two-screen flow.
+- **USSD Gateway Handler** — receives aggregator callbacks, drives the one-screen flow.
 - **Core App (Laravel)** — tenant management, visitor log, notification dispatch, exports.
-- **Postgres DB** — multi-tenant data store, `tenant_id`-scoped.
-- **Notification Dispatcher** — async, off-session, talks to whichever channel(s) are chosen.
-- **Manager/Tenant Dashboard** — thin web layer over the same data, building-wide vs
-  tenant-scoped views.
+- **Postgres DB** — multi-tenant store, `tenant_id`-scoped.
+- **Notification Dispatcher** — async, off-session, talks to the chosen channel(s).
+- **Manager/Tenant Dashboard** — thin web layer over the same data; building-wide vs tenant-scoped views.
 
-** Detailed component breakdown is deferred until after the prototype (Action #5 in the Phase 1
-plan) ,premature decomposition here would be guessing.
+Detailed component breakdown is deferred until after the prototype — premature decomposition here would be guessing.
 
----
-## 6. Runtime View
-![View sequence diagram](diagrams/sequence_diagram_visitor.png)
+### Runtime: USSD check-in (the critical path)
+![Sequence diagram](diagrams/sequence_diagram_visitor.svg)
 
-### ERD (Data Model)
+1. Visitor dials the tenant's unique code.
+2. Aggregator opens a session, sends screen 1 to us.
+3. We respond with the purpose prompt — **within the aggregator's per-screen timeout**.
+4. We record the check-in and send send a pop feedback and **end the session immediately**.
+5. **Off-session, asynchronously:** notification dispatched to manager.
 
-The Entity Relationship Diagram for the core data model is available in the repository diagrams folder:
+**The reason for this setup  is to keep sessions costs low.**
 
+> **Open question — session-drop recovery:** if the session drops between screens (visitor's
+> network), does redial start fresh or resume? Undecided; tracked in considerations.
+
+### Data model (ERD)
 ![ERD](diagrams/erd.svg)
 
-### ERD relationships
+- One Organization manages many Buildings; one Building houses many Tenants.
+- Each Tenant gets a Routing Code tying together Org, Building, and Tenant sequences.
+- One Routing Code processes many Visits (logging the exact code used at check-in); a Tenant receives many Visits over time.
+- A User links to exactly one entity by role — Organization (Org Admin), Building (Manager/Guard), or Tenant (Tenant Admin) — except the super admin, who sees everything.
 
-- One Organization can manage multiple Buildings.
-- One Building can house multiple Tenants.
-- Each Tenant is assigned a Routing Code, which ties together the Organization, Building, and Tenant sequences.
-- One Routing Code can process multiple Visits, securely logging the exact code used at check-in.
-- A single Tenant receives multiple Visits over time.
-- A User is linked to exactly one entity based on role: an Organization (Org Admins), a Building (Building Managers and Security Guards), or a Tenant (Tenant Admins) minus the super admin that can see everything .
-
-### Routing code generation example
-
-The routing code structure below shows how organization, building, and tenant sequences combine into a single tenant code.
-
+Routing-code structure (full algorithm in [`design_notes/routing_code_generation.md`](design_notes/routing_code_generation.md)):
 ```text
 Org 1 → seq 1
-  Building 1 (1st in Org 1) → seq 1 → code prefix "11"
-    tenant 1 → "111"
-    tenant 2 → "112"
-  Building 2 → seq 2 → code prefix "12"
+  Building 1 → prefix "11"
+    tenant 1 → "111"   tenant 2 → "112"
+  Building 2 → prefix "12"
     tenant 1 → "121"
-
 Org 2 → seq 2
-  Building 1 (1st in Org 2) → seq 1 → code prefix "21"
-    tenant 1 → "211"
-    tenant 2 → "212"
-    tenant 3 → "213"
+  Building 1 → prefix "21"
+    tenant 1 → "211"   tenant 2 → "212"
 ```
 
+### Deployment
+![Deployment diagram](diagrams/Deployment.svg)
 
-### 6.1 USSD check-in (the critical path)
-1. Visitor dials the tenant's unique code.
-2. Aggregator opens a session, sends screen 1 request to our system.
-3. System responds with identity/purpose prompt — **must respond within the aggregator's
-   per-screen timeout window**.
-4. Visitor confirms (screen 2).
-5. System records the check-in, ends the USSD session immediately.
-6. **Asynchronously**, off-session: notification is dispatched to tenant/guard.
-
-Key design point: step 6 is deliberately decoupled from step 5 so a slow or failed
-notification never causes the visitor's session to hang or time out.
-
-### 6.2 Session-drop recovery (open question)
-If the visitor's session drops between screen 1 and 2 (network issue, not our fault), what
-happens on redial — fresh session, or resume? Not yet decided; tracked as open question.
-
----
-
-## 7. Deployment View
-
-![Deployment diagram](diagrams/deployment.svg)
-
-**Note** for separate containers: the queue worker is in a separate container from the web app refer to [ADR-005: Queue worker runs as a separate container](adr/005-queue-worker-separate-container.md) for rationale and details. This is a deliberate architectural decision to protect the visitor's session from slow notification dispatch.
-
-- Dockerized Laravel app + Postgres, currently targeting a sandbox environment provided by
-  the USSD aggregator (Action #4 in the Phase 1 plan).
-- Hosting region / data residency: **open question**, pending regulatory confirmation
-  (§2.4). This affects where Postgres physically lives.
-- No redundant/multi-region deployment planned for Phase 1 — single-region is an accepted
-  risk given team size and timeline (see risk register).
-
----
-
-## 8. Crosscutting Concepts
-
-### 8.1 Multi-tenant security & isolation
-Tenant data isolation is enforced via `tenant_id` scoping on every query — every read/export
-path must filter by tenant, with no code path that can accidentally return cross-tenant data.
-Building-manager dashboard and exports are the one legitimate "all tenants" view and must be a distinct,
-explicitly-audited code path, not a relaxed version of the tenant path.
-
-### 8.2 Data protection
-- Visitor PII (name, phone, purpose, host) encrypted at rest and in transit.
-- Export actions (by tenant or building manager) should be logged — who exported what, when
-  — both for security audit and to support any future compliance requirement.
-
-### 8.3 Session-timeout-driven performance budget
-Performance is framed narrowly: **each USSD screen response must return within the
-aggregator's per-screen timeout (target: low single-digit seconds)**, even under concurrent
-load. This is not a general throughput target , it's a hard latency budget tied directly to
-visitor-facing availability. A slow DB query here doesn't just feel slow, it fails the
-check-in outright.
-
-### 8.4 Graceful degradation
-Notification delivery failures, session drops, and aggregator instability must never corrupt
-or duplicate the visitor log. The check-in record is the source of truth; notification is
-best-effort on top of it.
-
-### 8.5 Observability
-Minimum viable logging from day one: every USSD callback, every notification dispatch
-attempt/result, every export action. Without this, a dropped session is undebuggable in
-production and there's no way to tell whether a failure was ours or the aggregator's.
-
----
-
-## 9. Architecture Decisions
-
-Tracked separately in `/adr` (not duplicated here). Current decisions:
-- [ADR-001: Stack choice — Laravel + PostgreSQL + Docker](adr/001-stack-choice.md)
-- [ADR-002: Multi-tenancy via tenant_id column](adr/002-multitenancy-model.md)
-- [ADR-003: Real-time notification delivery SSE + PWA push, optional WhatsApp per tenant](adr/003-notification-options.md)
-- [ADR-004: CQRS for routing codes](adr/004-cqrs-routing-codes.md)
-- [ADR-005: Queue worker runs as a separate container](adr/005-queue-worker-separate-container.md)
+- Dockerized Laravel + Postgres, currently targeting the aggregator's sandbox.
+- **Queue worker runs in a separate container** from the web app — deliberate, to protect the visitor's session from slow notification dispatch ([ADR-005](adrs/005-queue-worker-separate-container.md)).
+- **Hosting region / data residency: open question**, pending regulatory confirmation (§2).
 
 
 ---
 
-## 10. Quality Requirements
+## 5. Crosscutting Concerns
 
-| Attribute | Scenario | Priority | Notes |
-|---|---|---|---|
-| **Availability** | During business hours, the check-in flow is reachable and functional ≥99.x% of the time (target TBD once baseline is known) | Critical | Two failure domains: our stack, and the aggregator (outside our control) |
-| **Performance (latency)** | Each USSD screen response returns within the aggregator's per-screen timeout under expected concurrent load | Critical | Framed as a latency *budget*, not throughput — directly threatens availability if missed |
-| **Security** | No code path can return another tenant's visitor data; PII is encrypted at rest/in transit | Critical | Multi-tenancy makes this sharper than typical SaaS — see §8.1 |
-| **Usability/Accessibility** | A visitor with a basic feature phone, on 2G, low literacy, completes check-in in two screens without confusion | High | Failure here looks identical to an outage from the visitor's perspective |
-| **Modifiability** | Phase 2 dashboards can be added without rewriting Phase 1's data model or core flow | High | Open question: direct DB read vs API layer for Phase 2 — see ADR-002 |
-| **Reliability** | A dropped USSD session never produces a duplicate or corrupted visitor log entry | High | Distinct from availability — "up" isn't enough, it must also be correct |
-| **Observability** | Any failed/dropped session can be traced to its cause (our system vs aggregator) within minutes | Medium-High | Needed to debug production issues with a 4-person team and no dedicated ops |
-| **Scalability** | System handles growth in tenants/buildings without architecture rework | Medium | Real but not urgent — current model (tenant_id scoping, single Postgres) is sufficient for now |
+- **Tenant isolation** — every read/export filters by `tenant_id`; no code path can return cross-tenant data. The manager's building-wide view is the *one* legitimate all-tenant path and must be a distinct, audited code path not a relaxed version of the tenant path.
+- **Data protection** — visitor PII (name, phone, purpose, host) encrypted at rest and in transit(will it be encrypted?) every export (tenant or manager) is logged: who exported what, when.
+- **Performance budget** — each USSD screen must return within the aggregator's per-screen timeout (low single-digit seconds) under concurrent load. This is a hard latency budget tied to availability, not a throughput target: a slow query here fails the check-in outright.
+- **Graceful degradation** — the check-in record is the source of truth; notification is best-effort on top. Notification failures, session drops, and aggregator instability must never corrupt or duplicate the visitor log.
+- **Observability** — from day one, log every USSD callback, every notification attempt/result, every export. Without it, a dropped session is undebuggable and you can't tell whether a failure was ours or the aggregator's.
 
 ---
 
-## 11. Risks & Technical Debt
+## 6. Reference
 
-Tracked separately and kept living in `risk-register.md` (not duplicated here, changes too
-frequently for a static doc section).
+### Decisions (full text in [`adrs/`](adrs/))
+- [ADR-001 — Stack: Laravel + PostgreSQL + Docker](adrs/001-stack-choice.md)
+- [ADR-002 — Multi-tenancy via `tenant_id` column](adrs/002-multitenancy-model.md)
+- [ADR-003 — Notifications: SSE + PWA push](adrs/003-notification-options.md)
+- [ADR-004 — CQRS for routing codes](adrs/004-cqrs-routing-codes.md)
+- [ADR-005 — Queue worker as a separate container](adrs/005-queue-worker-separate-container.md)
 
----
+### Quality requirements
 
-## 12. Glossary
+| Attribute | Scenario | Priority |
+|---|---|---|
+| Availability | Check-in reachable and functional ≥99.x% during business hours (target TBD). Two failure domains: our stack + the aggregator. | Critical |
+| Performance (latency) | Each screen response returns within the aggregator's per-screen timeout under expected concurrent load. A *budget*, not throughput. | Critical |
+| Security | No code path returns another tenant's data; PII encrypted at rest/in transit. | Critical |
+| Usability | Feature phone, 2G, low literacy → check-in done in two screens without confusion. | High |
+| Modifiability | Phase 2 dashboards added without rewriting Phase 1's data model or core flow. | High |
+| Reliability | A dropped session never produces a duplicate or corrupted log entry. | High |
+| Observability | Any failed/dropped session traced to its cause (us vs aggregator) within minutes. | Med-High |
+| Scalability | Growth in tenants/buildings without architecture rework. Not urgent. | Medium |
+
+### Risks & technical debt
+Tracked live in [`risk_register.md`](risk_register.md) — changes too often to duplicate here.
+
+### Glossary
 
 | Term | Meaning |
 |---|---|
-| **Tenant** | A business occupying space in a building, using the system to manage their own visitors |
-| **Building Manager** | Oversees an entire building; sees a building-wide (cross-tenant) visitor log |
-| **Session** | A single USSD interaction between a visitor's phone and the aggregator, bounded by a timeout |
-| **Aggregator** | Third-party telecom intermediary that routes USSD sessions to our system (e.g. Africa's Talking) |
-| **Checkpoint** | A physical/logical point in the visitor's journey through a building (mapping still being confirmed — Q6) |
-| **Two-screen flow** | The minimal USSD interaction: identity/purpose confirmation in exactly two screens |
-| **Routing key** | The unique code/number a visitor dials to reach a specific tenant |
-| **Off-session** | Any processing that happens after the USSD session has ended (e.g. notification dispatch) |
-| **On-session** | Any processing that happens during the active USSD session (e.g. screen responses) |
-| **CQRS** | Command Query Responsibility Segregation  a pattern for separating read and write operations for a data store |
-| **SSE** | Server-Sent Events  a web technology for pushing real-time updates from a server to a browser |
-| **PWA** | Progressive Web App  a web application that can be installed on a user's device and receive push notifications like a native app |
+| **Tenant** | A business in a building, managing its own visitors |
+| **Building Manager** | Oversees a building; sees the cross-tenant visitor log |
+| **Session** | One USSD interaction between phone and aggregator, bounded by a timeout |
+| **Aggregator** | Third-party telecom intermediary routing USSD to us (e.g. Africa's Talking) |
+| **Two-screen flow** | The minimal USSD interaction: purpose confirmation in exactly two screens |
+| **Routing key/code** | The unique code a visitor dials to reach a specific tenant |
+| **On-session** | Processing during the active USSD session (screen responses) |
+| **Off-session** | Processing after the session ends (e.g. notification dispatch) |
+| **CQRS** | Command Query Responsibility Segregation — separating reads from writes |
+| **SSE** | Server-Sent Events — server-to-browser real-time push |
+| **PWA** | Progressive Web App — installable web app that can receive push notifications |
