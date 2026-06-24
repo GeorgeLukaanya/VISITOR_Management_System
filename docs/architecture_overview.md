@@ -5,6 +5,25 @@ Related: [`adrs/`](adrs/) decision log · [`risk_register.md`](risk_register.md)
 
 ---
 
+## Contents
+
+1. [What & Why](#1-what--why)
+2. [Constraints & Context](#2-constraints--context)
+3. [Solution Strategy](#3-solution-strategy)
+4. [How It's Built](#4-how-its-built)
+   - [Building blocks (C4 Container)](#building-blocks-c4-container)
+   - [Runtime: USSD check-in (the critical path)](#runtime-ussd-check-in-the-critical-path)
+   - [Data model (ERD)](#data-model-erd)
+   - [Deployment](#deployment)
+5. [Crosscutting Concerns](#5-crosscutting-concerns)
+6. [Reference](#6-reference)
+   - [Decisions](#decisions-full-text-in-adrs)
+   - [Quality requirements](#quality-requirements)
+   - [Risks & technical debt](#risks--technical-debt)
+   - [Glossary](#glossary)
+
+---
+
 ## 1. What & Why
 
 **What:** A USSD-based visitor management system that digitally replaces the paper sign-in
