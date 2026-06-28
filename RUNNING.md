@@ -190,6 +190,7 @@ fire with `docker compose logs -f queue` in another terminal.
 | `vms_postgres` not `(healthy)`                       | Give it a few seconds, then `docker compose ps` again. Check `docker compose logs postgres`. |
 | Login fails for a seeded user                        | Run `make seed` (or `make fresh`). Password is `password`.                          |
 | `END Code not recognised` from the simulator         | Use a seeded routing code: `1001` or `1002`.                                        |
+| `403` from `POST /ussd`                               | `AT_CALLBACK_SECRET` is set but the request didn't carry it. Send `X-Callback-Secret: <secret>` or `?secret=<secret>`, or clear the env var in dev. |
 | Want a totally clean slate                            | `make fresh` (drop + re-migrate + seed), or `docker compose down -v` to also delete the DB volume. |
 
 ---
@@ -203,4 +204,13 @@ make tinker                     # Laravel REPL inside the app container
 make fresh                      # wipe DB, re-migrate, re-seed
 make down                       # stop the stack (DB volume kept)
 docker compose down -v          # stop AND delete the DB volume (full reset)
+
+# DPA retention prune (also scheduled daily at 02:30):
+docker compose exec app php artisan visits:prune --dry-run   # preview, deletes nothing
+docker compose exec app php artisan visits:prune             # delete visits past VISIT_RETENTION_DAYS
 ```
+
+> **USSD callback secret:** `AT_CALLBACK_SECRET` is empty by default, so the
+> `/ussd` callback is open and the simulator works as-is in dev. If you set a
+> secret, the callback requires it (via the `X-Callback-Secret` header or a
+> `?secret=` query param) or returns `403` — see the table below.

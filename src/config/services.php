@@ -45,6 +45,10 @@ return [
         'api_key' => env('AT_API_KEY'),
         'sender_id' => env('AT_SENDER_ID'),
         'ussd_service_code' => env('AT_USSD_SERVICE_CODE', '*384*1234#'),
+        // Shared secret used to authenticate AT's POST callback. Empty (the
+        // default) means the callback is left open — enforcement is opt-in and
+        // kicks in as soon as a value is set. See VerifyUssdCallback middleware.
+        'callback_secret' => env('AT_CALLBACK_SECRET'),
     ],
 
 ];

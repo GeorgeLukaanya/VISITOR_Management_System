@@ -267,8 +267,10 @@ Seeded demo accounts (password `password`):
 - **Production data must be Uganda-localised** (e.g. Raxio). The US cloud sandbox is
   **dev/testing only** and must hold **no real visitor data**. All secrets/DB config
   are env-driven so the same images redeploy onto local infra unchanged.
-- A retention window is configurable via `VISIT_RETENTION_DAYS` (the prune job is
-  not yet built — see [Open decisions](#open-decisions--stubs)).
+- A retention window is configurable via `VISIT_RETENTION_DAYS` and enforced by the
+  `visits:prune` command, scheduled daily (02:30). A window of `0` retains
+  indefinitely. Run it by hand with `php artisan visits:prune` (`--dry-run` to
+  preview, `--days=N` to override the window).
 
 ---
 
@@ -497,8 +499,8 @@ There are **three `.env` files, by design**:
 | `AT_DRIVER` | `log` | SMS driver: `log` (no network) or `africastalking` |
 | `AT_USERNAME` / `AT_API_KEY` / `AT_SENDER_ID` | `sandbox` / – / – | Africa's Talking SMS credentials |
 | `AT_USSD_SERVICE_CODE` | `*384*1234#` | Dialled USSD code |
-| `AT_CALLBACK_SECRET` | – | Shared secret to authenticate AT's callback (scaffolded, not enforced) |
-| `VISIT_RETENTION_DAYS` | `180` | DPA retention window (prune job TBD) |
+| `AT_CALLBACK_SECRET` | – | Shared secret to authenticate AT's callback. Empty = open (default); when set, the callback requires it via `X-Callback-Secret` header or `?secret=` query param, else 403 |
+| `VISIT_RETENTION_DAYS` | `180` | DPA retention window, enforced daily by `visits:prune` (`0` = keep forever) |
 
 > The container intentionally does **not** export these as real process env vars —
 > see the [testing note](#testing) for why that matters.
@@ -593,9 +595,10 @@ Authorized (Phase 1) for that building's manager and platform admins.
 make test     # or: docker compose exec app ./vendor/bin/pest
 ```
 
-**31 tests** covering: tenant scoping/isolation, every USSD transition,
+**40 tests** covering: tenant scoping/isolation, every USSD transition,
 notification job (one SMS + one broadcast, no double-send, claim release on
-failure), dashboard scoping + CSV export, auth.
+failure), dashboard scoping + CSV export, auth, the USSD callback-secret guard,
+and the visit-retention prune command.
 
 Tests run against an **in-memory SQLite** database, isolated from the dev Postgres.
 
@@ -649,8 +652,9 @@ Needs real aggregator access (Steven, action #1):
       code, drive the AT USSD simulator.
 - [ ] **AT SMS credentials** (`AT_USERNAME`, `AT_API_KEY`, optional `AT_SENDER_ID`),
       then set `AT_DRIVER=africastalking`. Verify the bulk-SMS endpoint/fields.
-- [ ] **Confirm callback authentication** — `AT_CALLBACK_SECRET` is scaffolded but
-      not enforced; AT's exact mechanism needs confirming.
+- [ ] **Confirm callback authentication** — `AT_CALLBACK_SECRET` is now enforced
+      when set (`X-Callback-Secret` header or `?secret=` query param → else 403);
+      confirm which mechanism AT actually uses and prune the unused branch.
 - [ ] **Reverb/guard-tablet device auth** — Phase 1 authorizes the per-building
       websocket channel for dashboard users; a dedicated guard-tablet (token →
       `Guard`) auth model isn't specced yet.
@@ -664,7 +668,7 @@ Needs real aggregator access (Steven, action #1):
 | Item | Status | Owner |
 |---|---|---|
 | **Routing-code uniqueness** | Globally unique for now; per-building is a small documented change (flagged in `create_tenants_table`) | Arthur (Q1/Q4) |
-| **Visit retention prune** | `VISIT_RETENTION_DAYS` configured; pruning command/schedule not built | Confirm policy, then build |
+| **Visit retention prune** | Built: `visits:prune` command, scheduled daily, driven by `VISIT_RETENTION_DAYS` | Confirm the retention policy/window with client |
 | **Invalid USSD purpose UX** | Re-shows the menu (stays within two screens) instead of ending | Confirm desired UX |
 | **Guard-tablet auth** | Channel authorized for dashboard users; device-token auth model TBD | When specced |
 | **Session/per-building pricing** | Does not block the build | Steven (Q2) / Arthur |
@@ -686,11 +690,12 @@ Needs real aggregator access (Steven, action #1):
 │   └── nginx/default.conf
 └── src/                  # the Laravel application
     ├── app/
-    │   ├── Console/Commands/SimulateUssd.php
+    │   ├── Console/Commands/           # SimulateUssd, PruneVisits (retention)
     │   ├── Contracts/SmsGateway.php
     │   ├── Enums/                       # UserRole, VisitStatus, VisitPurpose
     │   ├── Events/VisitCheckedIn.php    # Reverb broadcast
     │   ├── Http/Controllers/            # Ussd, Dashboard, Auth/Login
+    │   ├── Http/Middleware/             # VerifyUssdCallback (AT_CALLBACK_SECRET)
     │   ├── Jobs/NotifyVisitCheckedIn.php
     │   ├── Models/                      # + Scopes/TenantScope, Concerns/BelongsToTenant
     │   ├── Policies/                    # Visit, Tenant, Guard, Building
@@ -700,7 +705,7 @@ Needs real aggregator access (Steven, action #1):
     ├── database/migrations|factories|seeders
     ├── resources/views/                 # layouts/app, auth/login, dashboard/index
     ├── routes/web.php|channels.php
-    └── tests/                           # Pest (31 tests)
+    └── tests/                           # Pest (40 tests)
 ```
 
 ---

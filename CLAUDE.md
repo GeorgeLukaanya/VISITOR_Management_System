@@ -114,7 +114,12 @@ and `text` (the accumulated user input, with each step joined by `*`).
 - Sessions are stateless across POSTs except for what's in `text` — derive
   current step from `text`, do not assume in-memory state.
 - Always respond `200 OK` with a `CON`/`END` body even on errors the user
-  caused; reserve non-200 for genuine server faults.
+  caused; reserve non-200 for genuine server faults. (Note: the `VerifyUssdCallback`
+  middleware may reject a forged/unauthenticated caller with `403` *before* the
+  controller runs — that is not a USSD user error, so it is exempt from this rule.)
+- Authenticate the callback with `AT_CALLBACK_SECRET`: empty = open (dev default),
+  and when set the request must carry it via the `X-Callback-Secret` header or a
+  `?secret=` query param. Confirm AT's real mechanism, then drop the unused branch.
 
 ## Off-session notification job
 
@@ -136,8 +141,10 @@ The guard tablet shows: visitor phone number, destination tenant, arrival time.
   (e.g. Raxio). The US cloud sandbox is **dev/testing only** and must not hold
   real visitor data. Keep secrets and DB config environment-driven so the
   same containers redeploy onto local infra unchanged.
-- Make a visit-log **retention window** configurable rather than keeping data
-  forever.
+- A visit-log **retention window** is configurable via `VISIT_RETENTION_DAYS`
+  (config `visits.retention_days`) and enforced by the `visits:prune` command,
+  scheduled daily. A window of `0` retains indefinitely. Confirm the actual
+  policy/window with the client.
 
 ## Local development & testing
 

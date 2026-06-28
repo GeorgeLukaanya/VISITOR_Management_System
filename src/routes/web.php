@@ -3,6 +3,7 @@
 use App\Http\Controllers\Auth\LoginController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\UssdController;
+use App\Http\Middleware\VerifyUssdCallback;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -24,4 +25,8 @@ Route::middleware('auth')->group(function () {
 
 // Africa's Talking USSD callback. POSTed on every step of the session.
 // Configure this URL (e.g. https://<host>/ussd) in the AT dashboard / sandbox.
-Route::post('/ussd', UssdController::class)->name('ussd.callback');
+// VerifyUssdCallback authenticates the caller with AT_CALLBACK_SECRET when set
+// (no-op while empty, so the local simulator keeps working).
+Route::post('/ussd', UssdController::class)
+    ->middleware(VerifyUssdCallback::class)
+    ->name('ussd.callback');

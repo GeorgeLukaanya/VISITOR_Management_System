@@ -10,3 +10,6 @@
 .DS_Store
 Thumbs.db
 *.swp
+
+# Local spec/scratch docs (not part of the repo)
+VISITO_1.pdf
